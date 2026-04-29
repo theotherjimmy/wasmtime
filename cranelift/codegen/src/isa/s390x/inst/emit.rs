@@ -1580,7 +1580,9 @@ impl Inst {
                     ALUOp::Add64 => (0xb908, true),             // AGR
                     ALUOp::Add64Ext32 => (0xb918, true),        // AGFR
                     ALUOp::AddLogical32 => (0x1e, false),       // ALR
+                    ALUOp::AddLogicalCarry32 => (0xb998, true), // ALCR
                     ALUOp::AddLogical64 => (0xb90a, true),      // ALGR
+                    ALUOp::AddLogicalCarry64 => (0xb988, true), // ALCR
                     ALUOp::AddLogical64Ext32 => (0xb91a, true), // ALGFR
                     ALUOp::Sub32 => (0x1b, false),              // SR
                     ALUOp::Sub64 => (0xb909, true),             // SGR
@@ -2739,7 +2741,13 @@ impl Inst {
                 let opcode = 0xe7cb; // WFC
                 put(sink, &enc_vrr_a(opcode, rn, rm, 4, 0, 0));
             }
-
+            &Inst::VecRRRR { op, rd, rn, rm, ra } => {
+                let (opcode, m5) = match op {
+                    VecTrinaryOp::Add128Carry => (0xe7bb, 4),     // VAC
+                    VecTrinaryOp::Add128CarryCout => (0xe7b9, 4), // VACCC
+                };
+                put(sink, &enc_vrr_d(opcode, rd.to_reg(), rn, rm, ra, m5, 0));
+            }
             &Inst::VecRRR { op, rd, rn, rm } => {
                 let (opcode, m4) = match op {
                     VecBinaryOp::Add8x16 => (0xe7f3, 0),       // VAB

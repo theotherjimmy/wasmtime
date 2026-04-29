@@ -30,7 +30,7 @@ mod emit_tests;
 pub use crate::isa::s390x::lower::isle::generated_code::{
     ALUOp, CmpOp, FPUOp1, FPUOp2, FPUOp3, FpuConv128Op, FpuRoundMode, FpuRoundOp, LaneOrder,
     MInst as Inst, RxSBGOp, ShiftOp, SymbolReloc, UnaryOp, VecBinaryOp, VecFloatCmpOp, VecIntCmpOp,
-    VecIntEltCmpOp, VecShiftOp, VecUnaryOp,
+    VecIntEltCmpOp, VecShiftOp, VecTrinaryOp, VecUnaryOp,
 };
 
 /// The destination of a call instruction.
@@ -263,6 +263,9 @@ impl Inst {
                 FpuRoundOp::ToUInt32 | FpuRoundOp::FromUInt32 => InstructionSet::VXRS_EXT2,
                 FpuRoundOp::ToSInt32x4 | FpuRoundOp::FromSInt32x4 => InstructionSet::VXRS_EXT2,
                 FpuRoundOp::ToUInt32x4 | FpuRoundOp::FromUInt32x4 => InstructionSet::VXRS_EXT2,
+                _ => InstructionSet::Base,
+            },
+            Inst::VecRRRR { op, .. } => match op {
                 _ => InstructionSet::Base,
             },
             Inst::VecRRR { op, .. } => match op {
@@ -744,7 +747,8 @@ fn s390x_get_operands(inst: &mut Inst, collector: &mut DenyReuseVisitor<impl Ope
             collector.reg_use(rn);
             collector.reg_use(shift_reg);
         }
-        Inst::VecSelect { rd, rn, rm, ra, .. }
+        Inst::VecRRRR { rd, rn, rm, ra, .. }
+        | Inst::VecSelect { rd, rn, rm, ra, .. }
         | Inst::VecBlend { rd, rn, rm, ra, .. }
         | Inst::VecPermute { rd, rn, rm, ra, .. }
         | Inst::VecEvaluate { rd, rn, rm, ra, .. } => {
@@ -1379,7 +1383,9 @@ impl Inst {
                     ALUOp::Add64 => "agr",
                     ALUOp::Add64Ext32 => "agfr",
                     ALUOp::AddLogical32 => "alr",
+                    ALUOp::AddLogicalCarry32 => "alcr",
                     ALUOp::AddLogical64 => "algr",
+                    ALUOp::AddLogicalCarry64 => "alcgr",
                     ALUOp::AddLogical64Ext32 => "algfr",
                     ALUOp::Sub32 => "sr",
                     ALUOp::Sub64 => "sgr",
@@ -2514,7 +2520,17 @@ impl Inst {
                 let rn = pretty_print_fp_regpair(rn);
                 format!("{opcode} {rd}, {mode}, {rn}, 0")
             }
-
+            &Inst::VecRRRR { op, rd, rn, rm, ra } => {
+                let op = match op {
+                    VecTrinaryOp::Add128Carry => "vacq",
+                    VecTrinaryOp::Add128CarryCout => "vacccq",
+                };
+                let rd = pretty_print_reg(rd.to_reg());
+                let rn = pretty_print_reg(rn);
+                let rm = pretty_print_reg(rm);
+                let ra = pretty_print_reg(ra);
+                format!("{op} {rd}, {rn}, {rm}, {ra}")
+            }
             &Inst::VecRRR { op, rd, rn, rm } => {
                 let m5 = match op {
                     VecBinaryOp::UDiv32x4 | VecBinaryOp::SDiv32x4 => ", 0",

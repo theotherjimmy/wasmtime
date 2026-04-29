@@ -4452,6 +4452,34 @@
         (vec_add $I128 x y)
         (vec_extract_lane $I64X2 (vec_add_logical_cout $I128 x y) 1 (zero_reg))))
 
+;;;; Rules for `uadd_overflow_cin` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(decl overflow_cout (ProducesFlags ConsumesAndProducesFlags ConsumesFlags) InstOutput)
+(rule (overflow_cout (ProducesFlags.ProducesFlagsSideEffect prod_inst)
+                     (ConsumesAndProducesFlags.ReturnsReg middle_inst middle_result)
+                     (ConsumesFlags.ConsumesFlagsTwiceReturnsValueRegs consume_inst1 consume_inst2 consume_result))
+    (let ((_ Unit (emit prod_inst))
+          (_ Unit (emit middle_inst))
+          (_ Unit (emit consume_inst1))
+          (_ Unit (emit consume_inst2)))
+      (output_pair middle_result consume_result)))
+
+(rule 0 (lower (uadd_overflow_cin (ty_32_or_64 ty) x y c))
+    (overflow_cout
+      (convert_carry_to_flags c)
+      (add_logical_reg_carry_with_flags_paired ty x y)
+      (cmov_imm_imm $I8 (mask_as_cond 3) 1 0)))
+
+(rule 1 (lower (uadd_overflow_cin (fits_in_16 ty) x y c))
+    (overflow_and_result_from_shifted_and_carry
+      ty (aluop_add_logical $I32) x y c (mask_as_cond 3)))
+
+(rule 2 (lower (uadd_overflow_cin $I128 x y carry_in))
+(let ((c Reg (vec_insert_lane $I8X16 (vec_imm $I128 0) carry_in 15 (zero_reg))))
+      (output_pair
+        (vec_add_logical_with_carry $I128 x y c)
+        (vec_extract_lane $I64X2 (vec_add_logical_with_carry_cout $I128 x y c) 1 (zero_reg)))))
+
 ;;;; Rules for `usub_overflow` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Note: s390x stores and computes the borrow bit as a 0 when an overflow is present

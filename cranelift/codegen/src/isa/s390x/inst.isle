@@ -571,6 +571,14 @@
       (rd WritableReg)
       (rn RegPair))
 
+    ;; A trinary vector operation with three vector register sources.
+    (VecRRRR
+      (op VecTrinaryOp)
+      (rd WritableReg)
+      (rn Reg)
+      (rm Reg)
+      (ra Reg))
+
     ;; A binary vector operation with two vector register sources.
     (VecRRR
       (op VecBinaryOp)
@@ -1104,7 +1112,9 @@
     (Add64Ext16)
     (Add64Ext32)
     (AddLogical32)
+    (AddLogicalCarry32)
     (AddLogical64)
+    (AddLogicalCarry64)
     (AddLogical64Ext32)
     (Sub32)
     (Sub32Ext16)
@@ -1196,6 +1206,13 @@
     (CmpL64)
     (CmpL64Ext16)
     (CmpL64Ext32)
+))
+
+;; A trinary vector operation.
+(type VecTrinaryOp
+  (enum
+    (Add128Carry)
+    (Add128CarryCout)
 ))
 
 ;; A binary vector operation.
@@ -2189,6 +2206,13 @@
         (ProducesFlags.ProducesFlagsReturnsResultWithConsumer
             (MInst.AluRR op dst src1 src2) dst)))
 
+;; Helper for emitting `MInst.AluRR` instructions as flag producers and consumers.
+(decl alu_rr_produces_and_consumes_flags (Type ALUOp Reg Reg) ConsumesAndProducesFlags)
+(rule (alu_rr_produces_and_consumes_flags ty op src1 src2)
+      (let ((dst WritableReg (temp_writable_reg ty)))
+        (ConsumesAndProducesFlags.ReturnsReg
+            (MInst.AluRR op dst src1 src2) dst)))
+
 ;; Helper for emitting `MInst.AluRX` instructions.
 (decl alu_rx (Type ALUOp Reg MemArg) Reg)
 (rule (alu_rx ty op src mem)
@@ -2517,6 +2541,13 @@
 (rule (fpu_conv128_to_int ty op mode src)
       (let ((dst WritableReg (temp_writable_reg ty))
             (_ Unit (emit (MInst.FpuConv128ToInt op mode dst src))))
+        dst))
+
+;; Helper for emitting `MInst.VecRRRR` instructions.
+(decl vec_rrrr (Type VecTrinaryOp Reg Reg Reg) Reg)
+(rule (vec_rrrr ty op src1 src2 src3)
+      (let ((dst WritableReg (temp_writable_reg ty))
+            (_ Unit (emit (MInst.VecRRRR op dst src1 src2 src3))))
         dst))
 
 ;; Helper for emitting `MInst.VecRRR` instructions.
@@ -3896,6 +3927,32 @@
             (out Reg (lshr_imm $I32 (produces_flags_get_reg producer) (type_shift_up ty))))
         (output_pair out overflow)))
 
+(decl overflow_and_result_from_shifted_and_carry (Type ALUOp Reg Reg Reg Cond) InstOutput)
+(rule (overflow_and_result_from_shifted_and_carry (fits_in_16 ty) op x y c cond)
+    (let ((x_shifted Reg (lshl_imm $I32 x (type_shift_up ty)))
+          (y_shifted Reg (lshl_imm $I32 y (type_shift_up ty)))
+          (c_shifted Reg (lshl_imm $I32 (zext32_reg $I8 c) (type_shift_up ty)))
+          (intermediate ProducesFlags
+                  (alu_rrr_with_flags_paired ty op x_shifted c_shifted))
+          (intermediate_result Reg (produces_flags_get_reg intermediate))
+          (intermediate_carry Reg
+            (with_flags_reg
+              (produces_flags_ignore intermediate)
+              (cmov_imm_imm $I8 (mask_as_cond 3) 1 0)))
+	  (final ProducesFlags
+              (alu_rrr_with_flags_paired ty op y_shifted intermediate_result))
+          (final_result Reg (produces_flags_get_reg intermediate))
+          (final_carry Reg
+            (with_flags_reg
+              (produces_flags_ignore final)
+              (cmov_imm $I8 (mask_as_cond 3) 1 intermediate_carry))))
+  (output_pair (lshr_imm $I32 final_result (type_shift_up ty)) final_carry)))
+
+(decl convert_carry_to_flags (Reg) ProducesFlags)
+(rule (convert_carry_to_flags c)
+      (produces_flags_ignore
+        (add_logical_zimm32_with_flags_paired $I32 c 0xffffffffffffffff)))
+
 ;; Generate the paired overflow result from the generated condition codes
 (decl overflow_and_result_from_producer (ProducesFlags Cond) InstOutput)
 (rule (overflow_and_result_from_producer producer cond)
@@ -3962,6 +4019,10 @@
 (rule (aluop_add_logical $I32) (ALUOp.AddLogical32))
 (rule (aluop_add_logical $I64) (ALUOp.AddLogical64))
 
+(decl aluop_add_logical_carry (Type) ALUOp)
+(rule (aluop_add_logical_carry $I32) (ALUOp.AddLogicalCarry32))
+(rule (aluop_add_logical_carry $I64) (ALUOp.AddLogicalCarry64))
+
 (decl aluop_add_logical_zext32 (Type) ALUOp)
 (rule (aluop_add_logical_zext32 $I64) (ALUOp.AddLogical64Ext32))
 
@@ -3971,6 +4032,10 @@
 (decl add_logical_reg_with_flags_paired (Type Reg Reg) ProducesFlags)
 (rule (add_logical_reg_with_flags_paired ty x y)
       (alu_rrr_with_flags_paired ty (aluop_add_logical ty) x y))
+
+(decl add_logical_reg_carry_with_flags_paired (Type Reg Reg) ConsumesAndProducesFlags)
+(rule (add_logical_reg_carry_with_flags_paired ty x y)
+      (alu_rr_produces_and_consumes_flags ty (aluop_add_logical_carry ty) x y))
 
 (decl add_logical_reg_zext32 (Type Reg Reg) Reg)
 (rule (add_logical_reg_zext32 ty x y) (alu_rr ty (aluop_add_logical_zext32 ty) x y))
@@ -4005,6 +4070,13 @@
 
 (decl vec_add_logical_cout (Type Reg Reg) Reg)
 (rule (vec_add_logical_cout ty x y) (vec_rrr ty (vecop_add_logical_cout ty) x y))
+
+(decl vec_add_logical_with_carry (Type Reg Reg Reg) Reg)
+(rule (vec_add_logical_with_carry ty x y c) (vec_rrrr ty (VecTrinaryOp.Add128Carry) x y c))
+
+(decl vec_add_logical_with_carry_cout (Type Reg Reg Reg) Reg)
+(rule (vec_add_logical_with_carry_cout ty x y c) (vec_rrrr ty (VecTrinaryOp.Add128CarryCout) x y c))
+
 
 ;; Helpers for generating `sub` instructions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
